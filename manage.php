@@ -18,4 +18,3 @@ $type = $_GET['type'] ?? 'عام'; ?>
     </div>
 </div>
 <?php include 'includes/footer.php'; ?>
-
