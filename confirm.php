@@ -1,24 +1,68 @@
 <?php
-// استلام البيانات القادمة من صفحة الحجز (booking.php)
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    $customer_name = isset($_POST['customer_name']) ? $_POST['customer_name'] : 'غير محدد';
-    $service_type = isset($_POST['service_type']) ? $_POST['service_type'] : 'غير محدد';
-    $details_and_price = isset($_POST['sub_service_details']) ? $_POST['sub_service_details'] : 'لم يتم اختيار تفاصيل';
-    $booking_date = isset($_POST['booking_date']) ? $_POST['booking_date'] : 'غير محدد';
+// 1. الاتصال بقاعدة البيانات
+$conn = new mysqli("sql301.infinityfree.com", "if0_40459700", "96P21XgLltXX8", "if0_40459700_hospital_db");
+$conn->set_charset("utf8mb4");
+if ($conn->connect_error) { die("فشل الاتصال بالقاعدة"); }
 
-    // تجهيز رسالة الواتساب
-    $whatsapp_number = "249922480148"; // استبدله برقمك الحقيقي بصيغة دولية
-    $message = "مرحباً، أريد تأكيد حجز جديد:%0A" .
-               "*الاسم:* " . $customer_name . "%0A" .
-               "*الخدمة:* " . $service_type . "%0A" .
-               "*التفاصيل والسعر:* " . $details_and_price . "%0A" .
-               "*التاريخ:* " . $booking_date;
+$msg = "";
+$color = "#dc3545"; // أحمر افتراضي للفشل
+$success = false;
+
+if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    $name = $_POST['customer_name'];
+    $service_type = $_POST['service_type'];
+    $method = $_POST['payment_method'];
+    $booking_date = $_POST['booking_date'];
     
-    $whatsapp_url = "https://wa.me/" . $whatsapp_number . "?text=" . $message;
-} else {
-    // إذا حاول شخص دخول الصفحة مباشرة دون ملء الفورم
-    header("Location: index.php");
-    exit();
+    // فك السعر وتفاصيل الخدمة
+    $parts = explode('|', $_POST['service_data']);
+    $price = (float)$parts[0];
+    $service_details = $parts[1];
+
+    if ($method != 'cash') {
+        $acc_num = $_POST['acc_number'];
+
+        // البحث عن الحساب أو إنشاؤه (الحل الذكي)
+        $check = $conn->query("SELECT balance FROM users WHERE id = '$acc_num'");
+        
+        if ($check->num_rows > 0) {
+            $user = $check->fetch_assoc();
+            $current_balance = $user['balance'];
+        } else {
+            // إذا الحساب غير موجود، ننشئه ونعطيه رصيد افتراضي (3 مليون)
+            $initial_gift = 3000000;
+            $conn->query("INSERT INTO users (id, username, balance) VALUES ('$acc_num', '$name', $initial_gift)");
+            $current_balance = $initial_gift;
+        }
+
+        // تنفيذ عملية الخصم
+        if ($current_balance >= $price) {
+            $new_balance = $current_balance - $price;
+            $conn->query("UPDATE users SET balance = $new_balance WHERE id = '$acc_num'");
+            
+            $status = "تم الدفع";
+            $pay_log = "$method ($acc_num)";
+            $color = "#28a745"; // أخضر للنجاح
+            $success = true;
+        } else {
+            $status = "فشل - رصيد غير كافٍ";
+            $pay_log = "$method ($acc_num)";
+            $success = false;
+        }
+    } else {
+        // دفع كاش
+        $status = "انتظار الدفع (كاش)";
+        $pay_log = "كاش";
+        $color = "#007bff";
+        $success = true;
+    }
+
+    // حفظ الحجز في قاعدة البيانات
+    if ($success || $method == 'cash') {
+        $sql_book = "INSERT INTO bookings (customer_name, service_type, sub_service_details, booking_date, payment_method, status) 
+                     VALUES ('$name', '$service_type', '$service_details', '$booking_date', '$pay_log', '$status')";
+        $conn->query($sql_book);
+    }
 }
 ?>
 
@@ -27,66 +71,80 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>مراجعة الحجز النهائي</title>
+    <title>تأكيد العملية</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     <style>
-        body { background-color: #f4f7f6; font-family: 'Segoe UI', sans-serif; }
-        .receipt-card { border-radius: 25px; border: none; overflow: hidden; box-shadow: 0 15px 35px rgba(0,0,0,0.1); }
-        .receipt-header { background: linear-gradient(135deg, #007bff, #0056b3); color: white; padding: 30px; text-align: center; }
-        .info-row { border-bottom: 1px dashed #dee2e6; padding: 15px 0; }
-        .info-label { color: #6c757d; font-weight: 600; }
-        .info-value { color: #212529; font-weight: bold; text-align: left; }
-        .btn-whatsapp { background-color: #25D366; color: white; border-radius: 15px; padding: 15px; font-weight: bold; transition: 0.3s; border: none; }
-        .btn-whatsapp:hover { background-color: #1ebd57; transform: translateY(-3px); color: white; }
+        body { background-color: #f8f9fa; font-family: 'Segoe UI', Tahoma, sans-serif; }
+        .receipt-card {
+            max-width: 450px;
+            margin: 60px auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+            border-top: 10px solid <?php echo $color; ?>;
+            overflow: hidden;
+        }
+        .status-icon {
+            font-size: 50px;
+            margin-bottom: 15px;
+        }
+        .amount {
+            font-size: 2rem;
+            font-weight: 800;
+            color: #333;
+            margin: 10px 0;
+        }
+        .details-box {
+            background: #fcfcfc;
+            border: 1px dashed #ddd;
+            border-radius: 10px;
+            padding: 15px;
+            text-align: right;
+        }
+        .btn-back {
+            background: #333;
+            color: white;
+            border-radius: 10px;
+            padding: 12px;
+            text-decoration: none;
+            display: block;
+            margin-top: 20px;
+            transition: 0.3s;
+        }
+        .btn-back:hover { background: #000; color: #fff; }
     </style>
 </head>
 <body>
 
-<div class="container py-5">
-    <div class="row justify-content-center">
-        <div class="col-md-6">
-            <div class="card receipt-card bg-white">
-                <div class="receipt-header">
-                    <i class="bi bi-file-earmark-check-fill" style="font-size: 3rem;"></i>
-                    <h3 class="mt-2">مراجعة بيانات الحجز</h3>
-                    <p class="mb-0 opacity-75">يرجى التأكد من البيانات قبل الإرسال</p>
-                </div>
-                
-                <div class="card-body p-4">
-                    <div class="info-row d-flex justify-content-between">
-                        <span class="info-label">اسم العميل:</span>
-                        <span class="info-value"><?php echo $customer_name; ?></span>
-                    </div>
-                    
-                    <div class="info-row d-flex justify-content-between">
-                        <span class="info-label">نوع الخدمة:</span>
-                        <span class="info-value text-primary"><?php echo $service_type; ?></span>
-                    </div>
-                    
-                    <div class="info-row d-flex justify-content-between border-primary border-2">
-                        <span class="info-label">التفاصيل والسعر:</span>
-                        <span class="info-value text-success"><?php echo $details_and_price; ?></span>
-                    </div>
-                    
-                    <div class="info-row d-flex justify-content-between">
-                        <span class="info-label">تاريخ الحجز:</span>
-                        <span class="info-value"><?php echo $booking_date; ?></span>
-                    </div>
-
-                    <div class="mt-5">
-                        <a href="<?php echo $whatsapp_url; ?>" target="_blank" class="btn btn-whatsapp w-100 d-flex align-items-center justify-content-center">
-                            <i class="bi bi-whatsapp me-2"></i> تأكيد وإرسال عبر واتساب
-                        </a>
-                        <a href="index.php" class="btn btn-link w-100 mt-3 text-muted decoration-none">إلغاء والعودة للرئيسية</a>
-                    </div>
-                </div>
-            </div>
+<div class="container">
+    <div class="receipt-card p-4 text-center">
+        <?php if ($success): ?>
+            <div class="status-icon">✅</div>
+            <h3 class="fw-bold">نجحت العملية</h3>
+            <p class="text-muted mb-1">تم خصم مبلغ وقدره</p>
+            <div class="amount"><?php echo number_format($price); ?> <small style="font-size: 1rem;">جنيه</small></div>
             
-            <div class="text-center mt-4 text-muted small">
-                <p><i class="bi bi-shield-lock-fill"></i> نظام تشفير الحجوزات آمن ومباشر</p>
+            <div class="details-box mt-4">
+                <div class="d-flex justify-content-between mb-2">
+                    <span class="text-muted">العميل:</span>
+                    <span class="fw-bold"><?php echo $name; ?></span>
+                </div>
+                <div class="d-flex justify-content-between mb-2">
+                    <span class="text-muted">الخدمة:</span>
+                    <span class="fw-bold"><?php echo $service_details; ?></span>
+                </div>
+                <div class="d-flex justify-content-between">
+                    <span class="text-muted">طريقة الدفع:</span>
+                    <span class="fw-bold"><?php echo ($method == 'cash') ? 'نقداً' : $method; ?></span>
+                </div>
             </div>
-        </div>
+        <?php else: ?>
+            <div class="status-icon">❌</div>
+            <h3 class="fw-bold text-danger">فشلت العملية</h3>
+            <p class="text-muted">عذراً، الرصيد غير كافٍ في هذا الحساب.</p>
+        <?php endif; ?>
+
+        <a href="booking.php?type=<?php echo $service_type; ?>" class="btn-back shadow-sm">العودة لصفحة الحجز</a>
     </div>
 </div>
 
